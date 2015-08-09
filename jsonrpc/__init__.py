@@ -188,7 +188,9 @@ def jsonrpc_method(name, authenticated=False,
         X['arg_names'] = authentication_arguments + X['arg_names']
         X['name'] = _inject_args(X['name'], ('String', 'String'))
         from django.contrib.auth import authenticate as _authenticate
-        from django.contrib.auth.models import User
+        # allow replacement of User Model - is User actually used?
+        import django.contrib.auth
+        User = django.contrib.auth.get_user_model()
       else:
         authenticate = authenticated
       @six.wraps(func)
@@ -198,32 +200,58 @@ def jsonrpc_method(name, authenticated=False,
         if ((user is not None
               and six.callable(is_authenticated) and not is_authenticated())
             or user is None):
-          user = None
-          try:
-            creds = args[:len(authentication_arguments)]
-            if len(creds) == 0:
-                raise IndexError
-            # Django's authenticate() method takes arguments as dict
-            user = _authenticate(username=creds[0], password=creds[1], *creds[2:])
-            if user is not None:
-              args = args[len(authentication_arguments):]
-          except IndexError:
-              auth_kwargs = {}
-              try:
-                for auth_kwarg in authentication_arguments:
-                  auth_kwargs[auth_kwarg] = kwargs[auth_kwarg]
-              except KeyError:
+
+            creds = {}
+            # first look for creds in kwargs
+            for auth_kwarg in authentication_arguments:
+                if auth_kwarg in kwargs:
+                  creds[auth_kwarg] = kwargs.pop(auth_kwarg)
+
+            if not len(creds)==len(authentication_arguments):
+                # not able to find (all) auth args in kwargs, trying args
+                creds = {}
+                # try to blindly use the first elements in args as kwargs...
+                try:
+                    index = 0 
+                    for auth_kwarg in authentication_arguments:
+                        creds[auth_kwarg] = args[index]
+                        index+=1
+                    args=args[index:]
+                except IndexError:
+                    creds={}
+
+            if not len(creds)==len(authentication_arguments):
+                # still no success with finding the credentials
                 raise InvalidParamsError(
                   'Authenticated methods require at least '
-                  '[%s] or {%s} arguments', authentication_arguments)
+                  '[%s] or {%s} arguments',
+                  (authentication_arguments, authentication_arguments)
+                  )
 
-              user = _authenticate(**auth_kwargs)
-              if user is not None:
-                for auth_kwarg in authentication_arguments:
-                  kwargs.pop(auth_kwarg)
-          if user is None:
-            raise InvalidCredentialsError
-          request.user = user
+            # if callback is provided, calling callback with creds
+            if callable(authenticated):
+
+                try:
+                    user = authenticated(**creds)
+                except Exception:
+                    user = None
+                    # callback threw exception
+
+                if user is not None:
+                    request.user = user
+                    return func(request, *args, **kwargs)
+                else:
+                    raise InvalidCredentialsError
+
+            # finally trying djangos auth, e.g. callback was not provided
+
+            # Django's authenticate() method takes arguments as dict,
+            # default configuration of authentication_arguments matches.
+            user = _authenticate(**creds)
+            if user is None:
+                raise InvalidCredentialsError
+
+            request.user = user
         return func(request, *args, **kwargs)
     else:
       _func = func
