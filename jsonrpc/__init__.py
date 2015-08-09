@@ -189,8 +189,10 @@ def jsonrpc_method(name, authenticated=False,
         X['name'] = _inject_args(X['name'], ('String', 'String'))
         from django.contrib.auth import authenticate as _authenticate
         # allow replacement of User Model - is User actually used?
-        import django.contrib.auth
-        User = django.contrib.auth.get_user_model()
+        # this breaks Django 1.4 compatibilty, so commenting out as
+        # it seems the model is not used anywhere directly anyway
+        # import django.contrib.auth
+        # User = django.contrib.auth.get_user_model()
       else:
         authenticate = authenticated
       @six.wraps(func)
